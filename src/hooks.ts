@@ -33,7 +33,7 @@ async function onStartup() {
     CustomResolverManager.shared.appendCustomResolversInZotero(presetSciHubCustomResolvers(true));
   }
 
-  Common.registerPrefs();
+  await Common.registerPrefs();
 
   await Promise.all(
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
@@ -57,6 +57,7 @@ async function onMainWindowUnload(win: Window): Promise<void> {
 }
 
 function onShutdown(): void {
+  Common.unregisterMenus();
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
   // Remove addon object
