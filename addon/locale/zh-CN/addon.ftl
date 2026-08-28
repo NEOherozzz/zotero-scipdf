@@ -8,3 +8,4 @@ popwin-doimissing = DOI未找到
 popwin-pdfnotavaliable = PDF未找到
 popwin-unknownerror = 未知错误
 popwin-unknownerrorclick= 点击前往Sci-Hub
+popwin-verificationrequired = 需要人机验证，请稍后重试

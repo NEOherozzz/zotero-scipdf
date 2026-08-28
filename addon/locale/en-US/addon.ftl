@@ -8,3 +8,4 @@ popwin-doimissing = DOI is missing
 popwin-pdfnotavaliable = PDF not available
 popwin-unknownerror = Unknown Error
 popwin-unknownerrorclick= Click to the scihub page
+popwin-verificationrequired = Verification required (Captcha/Challenge), please try again later
