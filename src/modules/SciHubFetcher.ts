@@ -10,10 +10,32 @@ class PDFNotFoundError extends Error {
   }
 }
 
+class VerificationPageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "VerificationPageError";
+    Object.setPrototypeOf(this, VerificationPageError.prototype);
+  }
+}
+
 export class SciHubFetcher {
   private static readonly pdfNotAvailableRegexes = [
     /Please try to search again using DOI/im,
     /статья не найдена в базе/im,
+  ];
+
+  // Common human-verification frameworks that Sci-Hub mirrors may present
+  // instead of the expected article page (still HTTP 200).
+  private static readonly verificationIndicators: {
+    name: string;
+    regex: RegExp;
+  }[] = [
+    { name: "ALTCHA", regex: /altcha/im },
+    { name: "ALTCHA (zh)", regex: /你是机器人吗/ },
+    { name: "ALTCHA (en)", regex: /Are you a robot/im },
+    { name: "reCAPTCHA", regex: /recaptcha/im },
+    { name: "hCaptcha", regex: /hcaptcha/im },
+    { name: "Cloudflare", regex: /cf_challenge|cf_clearance/im },
   ];
 
   static async updateItems(
@@ -57,9 +79,13 @@ export class SciHubFetcher {
       );
 
       let resultAction: (() => void) | undefined;
+      let success = false;
+      let verificationCount = 0;
+      let pdfNotFoundCount = 0;
       for (const scihubUrl of scihubUrls) {
         try {
           await this.fetchPDF(scihubUrl, item);
+          success = true;
           resultAction = () => {
             Utils.showPopWin(
               getString("popwin-fetchsuccess"),
@@ -69,7 +95,18 @@ export class SciHubFetcher {
           };
           break;
         } catch (error) {
-          if (error instanceof PDFNotFoundError) {
+          if (error instanceof VerificationPageError) {
+            verificationCount++;
+            resultAction = () => {
+              Utils.showPopWin(
+                getString("popwin-verificationrequired"),
+                item.getDisplayTitle(),
+                "fail",
+                5000,
+              );
+            };
+          } else if (error instanceof PDFNotFoundError) {
+            pdfNotFoundCount++;
             resultAction = () => {
               Utils.showPopWin(
                 getString("popwin-pdfnotavaliable"),
@@ -88,6 +125,22 @@ export class SciHubFetcher {
             };
           }
         }
+      }
+      // if every attempted source required verification, make sure the user
+      // sees the verification hint rather than the last error encountered.
+      if (
+        !success &&
+        verificationCount > 0 &&
+        verificationCount + pdfNotFoundCount === scihubUrls.length
+      ) {
+        resultAction = () => {
+          Utils.showPopWin(
+            getString("popwin-verificationrequired"),
+            item.getDisplayTitle(),
+            "fail",
+            5000,
+          );
+        };
       }
       win.close();
       resultAction?.();
@@ -140,12 +193,66 @@ export class SciHubFetcher {
       const pdfUrl = new URL(rawPDFUrl, scihubUrl.href);
       pdfUrl.protocol = "https:";
       await Utils.attachRemotePDF(pdfUrl, item);
-    } else if (xhr.status === 200 && this.pdfNotAvailable(body)) {
-      ztoolkit.log(`scihub: PDF is not available at the moment "${scihubUrl}"`);
-      throw new PDFNotFoundError(`PDF is not available: ${scihubUrl}`);
+      return;
+    }
+
+    if (xhr.status === 200) {
+      const verificationType = this.detectVerification(xhr.responseXML, body);
+      if (verificationType) {
+        this.logDiagnostics(scihubUrl, xhr, verificationType);
+        throw new VerificationPageError(
+          `Verification required (${verificationType}): ${scihubUrl}`,
+        );
+      }
+      if (this.pdfNotAvailable(body)) {
+        ztoolkit.log(
+          `scihub: PDF is not available at the moment "${scihubUrl}"`,
+        );
+        throw new PDFNotFoundError(`PDF is not available: ${scihubUrl}`);
+      }
+    }
+
+    this.logDiagnostics(scihubUrl, xhr);
+    ztoolkit.log(`scihub: failed to fetch PDF from "${scihubUrl}"`);
+    throw new Error(xhr.statusText);
+  }
+
+  /**
+   * Detects whether the response is a human-verification challenge page
+   * (e.g. ALTCHA, reCAPTCHA, hCaptcha, Cloudflare) rather than the expected
+   * article/PDF-not-found page. Sci-Hub mirrors may return such pages with
+   * an HTTP 200 status, so this must be checked separately.
+   */
+  private static detectVerification(
+    responseXML: Document | null | undefined,
+    body?: Element | null,
+  ): string | undefined {
+    const title = responseXML?.title || "";
+    const innerHTML = (body as HTMLElement)?.innerHTML || "";
+    const haystack = `${title}\n${innerHTML}`;
+    const match = this.verificationIndicators.find(({ regex }) =>
+      regex.test(haystack),
+    );
+    return match?.name;
+  }
+
+  private static logDiagnostics(
+    scihubUrl: URL,
+    xhr: { status: number; responseXML?: Document | null },
+    verificationType?: string,
+  ) {
+    const title = xhr.responseXML?.title || "";
+    const size = `${xhr.responseXML?.documentElement?.innerHTML ?? ""}`.length;
+    if (verificationType) {
+      ztoolkit.log(
+        `scihub: verification page detected (${verificationType}) at "${scihubUrl}", ` +
+          `status=${xhr.status}, title="${title}", size=${size}`,
+      );
     } else {
-      ztoolkit.log(`scihub: failed to fetch PDF from "${scihubUrl}"`);
-      throw new Error(xhr.statusText);
+      ztoolkit.log(
+        `scihub: unable to locate PDF at "${scihubUrl}", ` +
+          `status=${xhr.status}, title="${title}", size=${size}`,
+      );
     }
   }
 
